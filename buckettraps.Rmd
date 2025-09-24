@@ -1,0 +1,353 @@
+---
+title: "Bucket Traps and Environmental Variables"
+author: "Amine Kousba"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install.packages("devtools")
+#install.packages("magrittr")
+#install_github("msmielak/moonlit")
+#install.packages("tidyverse")
+library(devtools)
+library(magrittr)
+library(moonlit)
+library(tidyverse)
+```
+
+## Overview: Instructions and Goals
+
+####*CTRL + F FOR "CHANGE HERE" if you want to change what variables/columns are represented in your analysis datasheet. The "analysis" dataframe is ready to use for data analysis.
+
+If you want to clean your own data from the Summer 2025 folder, run all chunks up to line 355 (end of "Step 6" section). All you have to do is download the Summer 2025 environmental variables and data spreadsheets as CSVs and enter it in using the first chunk labeled "step 1 reading in data."
+
+ All the chunks below that are the actual analysis.
+ 
+CTRL + F for the step you're looking for if you'd like to dig deeper into any of the steps:
+- Step 1: Reading in data
+- Step 2: Creating a dataframe of lat/long coordinates
+- Step 3: Preparing environmental variables spreadsheet 
+    - Step 3.1 Clean environmental data and merge with locations dataframe
+    - Step 3.2 Prepare for moonlight data
+    - Step 3.3 Calculating moon-related variables and merging onto environmental variables spreadsheet.
+    - Step 3.4 Make it simple to merge the environmental variables with the "buckets" dataframe.
+- Step 4: Clean up bucket trap datasheet
+- Step 5: Merge environmental variables and bucket trap dataframes for analysis
+- Step 6: Pivot Longer to final dataframe for analysis!
+
+## Creating and Cleaning Dataframes for Analysis
+
+### Step 1: Reading in data
+
+```{r step 1 reading in data, include = FALSE}
+
+buckets.raw <- read.csv("bucketmoonlight.csv") #import bucket trap data
+
+environmental.raw <- read.csv("environmentvars.csv") #import env. variables
+
+```
+
+### Step 2: Creating a dataframe of lat/long coordinates
+
+I made a dataframe called "locations" that includes the latitude and longitude of each collection site. This is made below.
+
+```{r step 2 locations df with lat/lon, include = FALSE, echo = FALSE}
+
+#rows
+z1 <- c("Z1", #site
+        42.295512, #lat
+        -71.2102915) #lon
+
+z2 <- c("Z2", 
+        42.22884, 
+        -71.2571010)
+
+z3 <- c("Z3", 
+        42.163844, 
+        -71.317235)
+
+w1 <- c("W1",
+        42.393101725504245, 
+        -71.1978027760078)
+
+w2 <- c("W2", 
+         42.413844, 
+         -71.293637)
+
+w3 <- c("W3", 
+        42.37770, 
+        -71.38885)
+
+s1 <- c("S1",  
+        42.200864, 
+        -71.095915)
+
+s2 <- c("S2", 
+        42.114610, 
+        -70.978406)
+
+s3 <- c("S3",
+        42.023411, 
+        -70.882217)
+
+#bind all into one df across rows
+locations <- as.data.frame(rbind(z1, z2, z3, 
+                                 w1, w2, w3,
+                                 s1, s2, s3))
+
+#rename columns
+colnames(locations) <- c("site", 
+                         "lat", 
+                         "lon")
+
+#change cols lat and lon to as.numeric, keep site as character 
+locations <- locations %>%
+  mutate(across(c(lat:lon), as.numeric),
+         across(c(site), as.character))
+
+#double checking column types
+str(locations)
+
+```
+
+### Step 3: Preparing environmental variables spreadsheet 
+
+Next, I want to clean the environmental variables spreadsheet and add moonlight data using the moonlit package. I'll also merge it with the "locations" df.
+
+Things I need to do for environmental data:
+- convert to asPOSIXct date/time format for moonlit package
+- add on lat/lon from locations df
+- add a column that matches the sample label column in the buckets df for easy merging (requires me to make extra cols to match the format of those in the buckets df)
+- some of my GO BACK mins_after_sunset vars seem to be not at the 5 min intervals that we collected our data at, so create a column that rounds mins after sunset to the nearest multiple of 5.
+
+#### Step 3.1 Clean environmental data and merge with locations dataframe.
+
+```{r step 3.1 cleaning environmental data and merge w location, echo = TRUE}
+#new df to store clean data in
+environmental <- environmental.raw
+
+#see what column names are to decide what to keep/delete/change
+colnames(environmental)
+
+#i don't want all these columns -- let's keep only a few
+environmental <- dplyr::select(environmental, #use the dplyr select fxn
+         1:8, #site, date, doy, sunset time, time, after.sunset, sqm, temp
+         10, #humidity
+         25) #notes
+
+#duplicate site column so we can split into site and bucket
+environmental <- environmental %>% 
+  mutate(split = Site) %>%  # duplicates Site col to "split"
+        separate(split, #separate split column into site and bucket
+                 into = c('site', 'bucket'), #(ex. W2, 1 )
+                 sep = "-") %>% 
+  rename('sitebucket' = 'Site') #rename original Site col. to sitebucket (ex. W2-1) 
+         
+
+#merge this with the locations df to add coordinates
+environmental <- merge(locations, environmental)
+
+#reorder columns
+environmental <- environmental %>% 
+  dplyr::select(sitebucket, site, lat, lon, bucket, everything())
+
+#double check column names
+colnames(environmental)
+
+#rename cols by creating vector of new col names then inserting into colnames
+environmentalcolnames <- 
+  c("sitebucket", "site", "lat", "lon", "bucket", 
+    "date.env", "doy", "sunset.time", "time.env", "mins.sunset", 
+    "sqm", "temp", "humidity", "notes.env")
+
+#rename columns
+colnames(environmental) <- environmentalcolnames
+
+
+#some mins.sunset are even numbers, let's round to nearest 0 or 5
+environmental$rounded.mins.sunset <- #new column
+  (round(environmental$mins.sunset/5))*5 # divide mins after sunset by 5, round to integer, multiply by 5
+
+#reorder cols again
+environmental <- environmental %>% 
+  dplyr::select(sitebucket, site, lat, lon, bucket,
+                date.env, doy, 
+                time.env, mins.sunset, rounded.mins.sunset, 
+                everything())
+
+#check what kind of variable each column is
+str(environmental)
+
+#convert sqm, temp, and humidity to as.numeric
+environmental <- environmental %>% 
+  mutate(across(c(sqm:humidity), as.numeric))
+
+
+```
+
+#### Step 3.2 Prepare for moonlight data step 3.2 prepping for moonlit data}
+I cleaned my environmental data, let's tailor it to be a good fit for the moonlit package
+
+Here is the moonlit syntax: 
+lat <- 52.2297
+lon <- 21.0122
+date <- as.POSIXct("2023-10-15 22:00:00")
+result <- calculateMoonlightIntensity(lat, lon, date, e = 0.28)
+
+The "e" in the result vector is dependent on altitude -- all of our sites are within 100m of sea level, so we will use the "default" value of 0.28.
+
+To make my data work with the moonlight data, I have to convert each date and time into the following format "2023-10-15 22:00:00". Eventually, I also want to merge this with the 
+
+```{r step 3.2 prepping for moonlit data}
+
+#make the time to asposix format
+environmental$mergeddatetime <- 
+  paste(environmental$date.env, "2025", environmental$time.env) #make a col. with date and time together
+  
+#make new col with date/time in asposix format
+
+environmental$asposixdatetime <- as.POSIXct(environmental$mergeddatetime,
+                                        format = "%B %d %Y %I:%M %p")
+
+#i want to move the col asposixtime to be in the 8th position in the moonlit df
+environmental <- environmental %>% 
+  relocate(asposixdatetime, .after = 7)
+```
+#### Step 3.3 Calculating moon-related variables and merging onto environmental variables spreadsheet.
+
+```{r 3.3 calculating moon data and merging w environment variables}
+
+moonlight.calcs <- calculateMoonlightIntensity(
+  lat = environmental$lat,
+  lon = environmental$lon,         
+  date = environmental$asposixdatetime,
+  e = 0.28)
+
+#merge moonlight.calcs with environmental df
+environmental <- cbind(environmental, moonlight.calcs)
+```
+
+#### Step 3.4 Make it simple to merge the environmental variables with the "buckets" dataframe.
+
+Let's make it easy to merge with our bucket data by giving each row a "sample" ID (e.g. W2-1.0801.0700) that matches that in the buckets df. 
+
+```{r step 3.4 make a sample col. in environmental to merge w buckets, echo = TRUE}
+
+#must convert date and time to match the 0806.0905 style format
+
+#date needs a year to format properly, datematch to match buckets format
+environmental$datematch <- format(as.Date(paste(environmental$date.env, "2025"),
+                                          format = "%B %d %Y"), "%m%d")
+
+
+#format "timematch" to match the buckets format
+environmental$timematch <- strptime(environmental$time.env, 
+                                         format = "%I:%M %p") 
+
+environmental$timematch <- format(environmental$timematch, 
+                                  "%I%M")
+
+#paste it all together into a "sample" ID column
+environmental$sample <- paste(environmental$sitebucket, 
+                       environmental$datematch,
+                       environmental$timematch,
+                       sep = ".") #separate each with a .
+
+```
+
+
+### Step 4: Clean up bucket trap datasheet
+
+I want to clean my bucket trap datasheet up into something easier to work with and merge with the environmental df.
+
+```{r step 4 cleaning bucket data, echo = TRUE}
+#new df to store clean data in
+buckets <- buckets.raw
+
+colnames(buckets) # contains 25 columns, the last 4 deleteable
+
+#subset buckets df to exclude columns 22-25
+buckets <- dplyr::select(buckets, c(1:21))
+
+
+#create a vector of new names for 21 columns in buckets data
+bucketcolnames <- 
+  c("label", "size", "diptera", "coleoptera", "lepidoptera", 
+    "hemiptera", "ephemeroptera", "hymenoptera", "trichoptera", "psocodea",
+    "plecoptera", "megaloptera", "blattodea", "mecoptera", "neuroptera",
+    "orthoptera", "odonata", "dermaptera", "noninsect", "unidentifiable",
+    "notes.bucket")
+
+#replace the column names 
+colnames(buckets) <- bucketcolnames
+
+#duplicate label column, then split new column into: site, bucket, date, time
+
+#duplicate label column in buckets
+buckets$sample <- buckets$label
+
+#move sample column to front
+buckets <- buckets %>% 
+  dplyr::select(sample, everything())
+
+#split label column according to hyphens and dots into site, bucket, date, time
+buckets <- buckets %>% 
+  separate(col = label, #separate label column
+           into = c("site", "bucket", "date", "time"), #titles of new columns
+           sep = ("\\.|-")) #using period and hyphens
+#make as.numeric integer
+buckets$unidentifiable <- as.integer(buckets$unidentifiable)
+
+#set NAs in columns diptera (7) to unidentifiable (25) as 0s
+buckets <- buckets %>% 
+  mutate(across(c(7:25), ~ replace_na(., 0)))
+
+```
+
+###Step 5: Merge environmental variables and bucket trap dataframes for analysis.
+
+Here is the widest version of our dataset. You can change what columns you choose to include by modifying lines 298:303.
+
+```{r step 5 merge the dataframes CHANGE HERE - can change what columns are included in lines 298 to 303}
+
+mergeddata <- merge(environmental, buckets, 
+                    by = "sample") #use sample column to merge each row
+
+colnames(mergeddata)
+
+#lets clean up, reorder, and remove some columns
+mergeddata <- dplyr::select(mergeddata, 
+                  c(1:6, #site bucket sample lat lon
+                    7:10, 12, 13, #time and date columns
+                    14:16, 22:28, #environmental and moon variables
+                    17, 54, #notes for environment and buckets
+                    35:53)) #sizes and orders
+
+#rename columns 
+mergeddata <- mergeddata %>% 
+  rename("site" = "site.x", # rename using syntax "newname" = "oldname"
+         "bucket" = "bucket.x",
+         "date" = "date.env",
+         "time" = "time.env") 
+
+```
+
+### Step 6: Pivot Longer to final dataframe for analysis!
+
+```{r step 6 pivot longer and create analysis df}
+colnames(mergeddata)
+
+#pivotlonger 
+analysis <- pivot_longer(mergeddata, cols = 26:43) #pivot longer at insect orders
+
+
+#rename cols for order and abundance
+
+analysis <- analysis %>% 
+  rename("order" = "name",
+         "abundance" = "value")
+
+```
